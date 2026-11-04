@@ -42,7 +42,7 @@ HTTP_SESSION = requests.Session()
 retries = Retry(total=2, backoff_factor=0.1, status_forcelist=[429, 500, 502, 503, 504])
 HTTP_SESSION.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=50, pool_maxsize=100))
 
-# ---------- FLASK WEB SERVER (Render ke liye) ----------
+# ---------- FLASK WEB SERVER ----------
 app = Flask(__name__)
 
 @app.route('/')
@@ -62,21 +62,21 @@ def keep_alive():
 SYSTEM = (
     "Act as RANKVERSE AI: a smart, helpful assistant. "
     "STRICT: Reply in HINGLISH or English. NEVER use Devanagari script. Use emojis sparingly. "
-    "RULE: If user asks a study question, DO NOT greet. Answer directly."
+    "RULE 1: If user asks a study question, DO NOT greet. Answer directly. "
+    "RULE 2: If user asks you to 'tag' or 'call' someone by their name, output their username with an '@' symbol (e.g., '@username') and a friendly message."
 )
 
 HELP_TEXT = (
     "✨ <b>RANKVERSE AI | COMMAND CENTER</b> ✨\n"
     "━━━━━━━━━━━━━━━━━━\n"
-    "Heyy mittar! Main in saare kaamon mein aapki help kar sakta hoon:\n\n"
-    "🤖 <b>AI Chat & Doubts:</b>\nBas apna sawal type karein. Main instantly jawab dunga.\n\n"
-    "📸 <b>Photo Doubt:</b>\nKisi bhi question ki photo bhejein, main solve kar dunga.\n\n"
-    "📄 <b>PDF Summarizer:</b>\nKoi bhi PDF file bhejein, main uski short summary nikal kar dunga.\n\n"
-    "🌐 <b>Live Web Search:</b>\n<code>/search [topic]</code>\n<i>(Example: /search NEET 2026 news)</i>\n\n"
-    "🌦️ <b>Weather Update:</b>\n<code>/weather [city]</code>\n<i>(Example: /weather Delhi)</i>\n\n"
-    "⏰ <b>Reminder System:</b>\n<code>/remind [minutes] [task]</code>\n<i>(Example: /remind 10 Study Biology)</i>\n\n"
-    "🗣️ <b>Translator:</b>\n<code>/translate [language] [text]</code>\n<i>(Example: /translate Spanish I love you)</i>\n\n"
-    "📌 <b>Group Chat:</b>\nMujhe group me add karein aur <b>@RankVerseAIBot</b> likh kar apna message bhejein.\n"
+    "🤖 <b>AI Chat & Doubts:</b>\nBas apna sawal type karein.\n\n"
+    "📸 <b>Photo Doubt:</b>\nPhoto bhejein, solve kar dunga.\n\n"
+    "📄 <b>PDF Summarizer:</b>\nPDF bhejein, summary nikal dunga.\n\n"
+    "🌐 <b>Search:</b>\n<code>/search [topic]</code> (Ab har cheez ka jawab dega)\n\n"
+    "🌦️ <b>Weather:</b>\n<code>/weather [city]</code>\n\n"
+    "⏰ <b>Reminder:</b>\n<code>/remind [time] [task]</code> (e.g., /remind 10m Study)\n\n"
+    "🗣️ <b>Translator:</b>\n<code>/translate [lang] [text]</code>\n\n"
+    "📢 <b>Tag All:</b>\n<code>/all [message]</code> (Note: Telegram bots mass-tag nahi kar sakte, par msg sabko chala jayega)\n"
     "━━━━━━━━━━━━━━━━━━"
 )
 
@@ -185,31 +185,56 @@ def send_answer(chat_id, message_id, prompt, uid=None, image_b64=None, system_pr
             if len(sessions) > 250: sessions.pop(next(iter(sessions)))
     else: bot.send_message(chat_id, answer, reply_to_message_id=message_id)
 
-# ---------- FEATURES ----------
+# ---------- /ALL COMMAND ----------
+@bot.message_handler(commands=['all'])
+def all_cmd(m):
+    text = m.text.partition(' ')[2].strip()
+    if not text:
+        return bot.reply_to(m, "❌ Format: <code>/all [message]</code>", parse_mode="HTML")
+    
+    msg = f"📢 <b>ATTENTION EVERYONE!</b>\n\n{text}\n\n<i>(Note: Telegram restricts bots from auto-tagging everyone. Please tag manually if needed.)</i>"
+    bot.reply_to(m, msg, parse_mode="HTML")
+
+# ---------- SEARCH (Now always answers) ----------
 def pure_python_search(query):
     url = "https://html.duckduckgo.com/html/"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = HTTP_SESSION.post(url, data={"q": query}, headers=headers, timeout=15)
+        r = HTTP_SESSION.get(url, params={"q": query}, headers=headers, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         results = []
         for result in soup.find_all('div', class_='result__body')[:3]:
-            title_tag, snippet_tag = result.find('a', class_='result__a'), result.find('a', class_='result__snippet')
-            if title_tag: results.append({"title": title_tag.get_text(strip=True), "body": snippet_tag.get_text(strip=True) if snippet_tag else "", "href": title_tag['href']})
+            title_tag = result.find('a', class_='result__a')
+            snippet_tag = result.find('a', class_='result__snippet')
+            if title_tag: 
+                results.append({
+                    "title": title_tag.get_text(strip=True), 
+                    "body": snippet_tag.get_text(strip=True) if snippet_tag else "", 
+                    "href": title_tag['href']
+                })
         return results
-    except Exception: return []
+    except Exception: 
+        return []
 
 @bot.message_handler(commands=['search'])
 def search_cmd(m):
     query = m.text.partition(' ')[2].strip()
     if not query: return bot.reply_to(m, "❌ Format: <code>/search topic</code>", parse_mode="HTML")
+    
     bot.send_chat_action(m.chat.id, 'typing')
     results = pure_python_search(query)
-    if not results: return bot.reply_to(m, "❌ No results found.")
-    msg = f"🔍 <b>Results for:</b> {query}\n━━━━━━━━━━━━━━━━━━\n"
-    for i, res in enumerate(results, 1): msg += f"<b>{i}. {res['title']}</b>\n{res['body'][:150]}...\n<a href='{res['href']}'>Read More</a>\n\n"
-    bot.reply_to(m, msg, parse_mode="HTML", disable_web_page_preview=True)
+    
+    if results:
+        # If web results are found, feed them to AI to create a clean answer
+        context = "\n".join([f"{r['title']}: {r['body']}" for r in results])
+        prompt = f"User asked: {query}\n\nWeb Search Context:\n{context}\n\nBased on this, give a direct, helpful answer in Hinglish/English."
+        send_answer(m.chat.id, m.message_id, prompt, m.from_user.id)
+    else:
+        # If web search fails, use AI's internal knowledge
+        prompt = f"Search is unavailable. Based on your knowledge, answer this query directly: {query}"
+        send_answer(m.chat.id, m.message_id, prompt, m.from_user.id)
 
+# ---------- TRANSLATOR ----------
 @bot.message_handler(commands=['translate'])
 def translate_cmd(m):
     args = m.text.partition(' ')[2].strip().split(' ', 1)
@@ -218,6 +243,7 @@ def translate_cmd(m):
     translation = groq_ai(f"Translate to {args[0]}: {args[1]}", system_prompt="Expert translator.")
     bot.reply_to(m, f"🌐 <b>Translation:</b>\n{translation}", parse_mode="HTML")
 
+# ---------- WEATHER ----------
 @bot.message_handler(commands=['weather'])
 def weather_cmd(m):
     city = m.text.partition(' ')[2].strip()
@@ -230,17 +256,38 @@ def weather_cmd(m):
         bot.reply_to(m, f"🌦️ <b>{name}</b>\n🌡️ {w['current']['temperature_2m']}°C\n💧 {w['current']['relative_humidity_2m']}%\n💨 {w['current']['wind_speed_10m']} km/h", parse_mode="HTML")
     except Exception: bot.reply_to(m, "⚠️ Weather error.")
 
-def send_reminder(chat_id, text):
-    try: bot.send_message(chat_id, f"⏰ <b>REMINDER:</b>\n\n{text}", parse_mode="HTML")
+# ---------- REMINDER (Now tags user) ----------
+def send_reminder(chat_id, text, user_tag):
+    try: 
+        bot.send_message(chat_id, f"⏰ <b>REMINDER FOR {user_tag}:</b>\n\n{text}", parse_mode="HTML")
     except Exception: pass
 
 @bot.message_handler(commands=['remind'])
 def remind_cmd(m):
-    args = m.text.partition(' ')[2].strip().split(' ', 1)
-    if len(args) < 2 or not args[0].isdigit(): return bot.reply_to(m, "❌ Format: <code>/remind 5 Task</code>", parse_mode="HTML")
-    threading.Timer(int(args[0]) * 60, send_reminder, args=[m.chat.id, args[1]]).start()
-    bot.reply_to(m, f"✅ Reminder set for {args[0]} mins.", parse_mode="HTML")
+    args = m.text.partition(' ')[2].strip()
+    match = re.match(r'(\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\s+(.*)', args, re.IGNORECASE)
+    
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2).lower()
+        task = match.group(3)
+        minutes = amount * 60 if unit.startswith('h') else amount
+    else:
+        parts = args.split(' ', 1)
+        if len(parts) < 2 or not parts[0].isdigit():
+            return bot.reply_to(m, "❌ Format: <code>/remind 10m Task</code> ya <code>/remind 2h Study</code>", parse_mode="HTML")
+        minutes = int(parts[0])
+        task = parts[1]
+    
+    # Create user tag
+    user_tag = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
+    
+    threading.Timer(minutes * 60, send_reminder, args=[m.chat.id, task, user_tag]).start()
+    
+    time_str = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours"
+    bot.reply_to(m, f"✅ Reminder set for <b>{time_str}</b>.\nI will tag you ({user_tag}) when time is up!", parse_mode="HTML")
 
+# ---------- PDF SUMMARIZER ----------
 @bot.message_handler(content_types=['document'])
 def pdf_handler(m):
     save_user(m.from_user)
@@ -259,6 +306,7 @@ def pdf_handler(m):
         send_answer(m.chat.id, m.message_id, f"Summarize:\n{text}", m.from_user.id, system_prompt="Expert summarizer.")
     except Exception: bot.reply_to(m, "⚠️ PDF error.")
 
+# ---------- START & HELP ----------
 @bot.message_handler(commands=["start", "reset"])
 def start(m):
     waiting.pop(m.from_user.id, None)
